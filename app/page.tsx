@@ -77,164 +77,186 @@ function isChecked(value: unknown): boolean {
 function parseWorkbook(file: File, workbook: XLSX.WorkBook) {
   const records: HiracRecord[] = [];
 
-  workbook.SheetNames.forEach((sheetName) => {
-    const worksheet = workbook.Sheets[sheetName];
+  // Only process the FIRST worksheet
+  const sheetName = workbook.SheetNames[0];
 
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
-      header: 1,
-      defval: "",
-      raw: true,
-    });
+  if (!sheetName) {
+    return records;
+  }
 
-    // Find the row containing "ACTIVITY / STEPS"
-    const headerRowIndex = rows.findIndex((row) =>
-      row.some(
-        (cell) =>
-          String(cell ?? "")
-            .trim()
-            .toUpperCase() === "ACTIVITY / STEPS",
-      ),
-    );
+  const worksheet = workbook.Sheets[sheetName];
 
-    // Ignore sheets that don't contain the HIRAC table.
-    if (headerRowIndex === -1) {
-      return;
-    }
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+    header: 1,
+    defval: "",
+    raw: true,
+  });
 
-    const headerRow = rows[headerRowIndex];
-
-    // Find which Excel column the table starts at.
-    const startColumn = headerRow.findIndex(
+  // Find the row containing "ACTIVITY / STEPS"
+  const headerRowIndex = rows.findIndex((row) =>
+    row.some(
       (cell) =>
         String(cell ?? "")
           .trim()
           .toUpperCase() === "ACTIVITY / STEPS",
+    ),
+  );
+
+  if (headerRowIndex === -1) {
+    return records;
+  }
+
+  const headerRow = rows[headerRowIndex];
+
+  // Find which Excel column the table starts at
+  const startColumn = headerRow.findIndex(
+    (cell) =>
+      String(cell ?? "")
+        .trim()
+        .toUpperCase() === "ACTIVITY / STEPS",
+  );
+
+  if (startColumn === -1) {
+    return records;
+  }
+
+  // Data starts after the multi-row header section
+  const dataStartRow = headerRowIndex + 4;
+
+  for (
+    let rowIndex = dataStartRow;
+    rowIndex < rows.length;
+    rowIndex++
+  ) {
+    const row = rows[rowIndex];
+
+    const rowText = row
+      .map((cell) => String(cell ?? "").toUpperCase())
+      .join(" ");
+
+    // Stop when we reach the footer/signatures
+    if (
+      rowText.includes("REFERENCE PROCEDURE") ||
+      rowText.includes("PREPARED BY:") ||
+      rowText.includes("REVIEWED BY:") ||
+      rowText.includes("APPROVED BY:") ||
+      rowText.includes("NOTED BY:")
+    ) {
+      break;
+    }
+
+    const values = row.slice(
+      startColumn,
+      startColumn + 22,
     );
 
-    if (startColumn === -1) {
-      return;
+    const hasData = values.some(
+      (value) =>
+        value !== "" &&
+        value !== null &&
+        value !== undefined,
+    );
+
+    if (!hasData) {
+      continue;
     }
 
-    // Based on the HIRAC Excel structure,
-    // actual data starts after the multi-row headers.
-    const dataStartRow = headerRowIndex + 4;
+    const record: HiracRecord = {
+      source_file: file.name,
+      sheet_name: sheetName,
+      excel_row_number: rowIndex + 1,
 
-    for (
-      let rowIndex = dataStartRow;
-      rowIndex < rows.length;
-      rowIndex++
-    ) {
-      const row = rows[rowIndex];
+      activity_steps: cleanText(
+        row[startColumn],
+      ),
 
-      const rowText = row
-        .map((cell) => String(cell ?? "").toUpperCase())
-        .join(" ");
+      system: cleanText(
+        row[startColumn + 1],
+      ),
 
-      // Stop once we reach the document footer/signatures.
-      if (
-        rowText.includes("REFERENCE PROCEDURE") ||
-        rowText.includes("PREPARED BY:") ||
-        rowText.includes("REVIEWED BY:") ||
-        rowText.includes("APPROVED BY:")
-      ) {
-        break;
-      }
+      hazard_aspect: cleanText(
+        row[startColumn + 2],
+      ),
 
-      // Only examine the 22 HIRAC columns.
-      const values = row.slice(
-        startColumn,
-        startColumn + 22,
-      );
+      risk_impact: cleanText(
+        row[startColumn + 3],
+      ),
 
-      // Skip completely empty rows.
-      const hasData = values.some((value) => {
-        return (
-          value !== "" &&
-          value !== null &&
-          value !== undefined
-        );
-      });
+      routine: isChecked(
+        row[startColumn + 4],
+      ),
 
-      if (!hasData) {
-        continue;
-      }
+      non_routine: isChecked(
+        row[startColumn + 5],
+      ),
 
-      const record: HiracRecord = {
-        source_file: file.name,
-        sheet_name: sheetName,
-        excel_row_number: rowIndex + 1,
+      type: cleanText(
+        row[startColumn + 6],
+      ),
 
-        activity_steps: cleanText(row[startColumn]),
-        system: cleanText(row[startColumn + 1]),
-        hazard_aspect: cleanText(row[startColumn + 2]),
-        risk_impact: cleanText(row[startColumn + 3]),
+      current_control: cleanText(
+        row[startColumn + 7],
+      ),
 
-        routine: isChecked(row[startColumn + 4]),
-        non_routine: isChecked(row[startColumn + 5]),
+      initial_probability: cleanNumber(
+        row[startColumn + 8],
+      ),
 
-        type: cleanText(row[startColumn + 6]),
-        current_control: cleanText(row[startColumn + 7]),
+      initial_severity: cleanNumber(
+        row[startColumn + 9],
+      ),
 
-        initial_probability: cleanNumber(
-          row[startColumn + 8],
-        ),
+      initial_legal_laws: cleanNumber(
+        row[startColumn + 10],
+      ),
 
-        initial_severity: cleanNumber(
-          row[startColumn + 9],
-        ),
+      initial_total: cleanNumber(
+        row[startColumn + 11],
+      ),
 
-        initial_legal_laws: cleanNumber(
-          row[startColumn + 10],
-        ),
+      elimination: cleanText(
+        row[startColumn + 12],
+      ),
 
-        initial_total: cleanNumber(
-          row[startColumn + 11],
-        ),
+      substitution: cleanText(
+        row[startColumn + 13],
+      ),
 
-        elimination: cleanText(
-          row[startColumn + 12],
-        ),
+      engineering_control: cleanText(
+        row[startColumn + 14],
+      ),
 
-        substitution: cleanText(
-          row[startColumn + 13],
-        ),
+      administrative_control: cleanText(
+        row[startColumn + 15],
+      ),
 
-        engineering_control: cleanText(
-          row[startColumn + 14],
-        ),
+      ppe: cleanText(
+        row[startColumn + 16],
+      ),
 
-        administrative_control: cleanText(
-          row[startColumn + 15],
-        ),
+      additional_control: cleanText(
+        row[startColumn + 17],
+      ),
 
-        ppe: cleanText(
-          row[startColumn + 16],
-        ),
+      final_probability: cleanNumber(
+        row[startColumn + 18],
+      ),
 
-        additional_control: cleanText(
-          row[startColumn + 17],
-        ),
+      final_severity: cleanNumber(
+        row[startColumn + 19],
+      ),
 
-        final_probability: cleanNumber(
-          row[startColumn + 18],
-        ),
+      final_legal_laws: cleanNumber(
+        row[startColumn + 20],
+      ),
 
-        final_severity: cleanNumber(
-          row[startColumn + 19],
-        ),
+      final_total: cleanNumber(
+        row[startColumn + 21],
+      ),
+    };
 
-        final_legal_laws: cleanNumber(
-          row[startColumn + 20],
-        ),
-
-        final_total: cleanNumber(
-          row[startColumn + 21],
-        ),
-      };
-
-      records.push(record);
-    }
-  });
+    records.push(record);
+  }
 
   return records;
 }
@@ -249,6 +271,9 @@ export default function Home() {
 
   const [message, setMessage] = useState("");
 
+  const [isSubmitting, setIsSubmitting] =
+    useState(false);
+
   async function handleFileChange(
     event: React.ChangeEvent<HTMLInputElement>,
   ) {
@@ -259,24 +284,30 @@ export default function Home() {
     }
 
     setFileName(file.name);
+    setRecords([]);
     setMessage("Reading Excel file...");
 
     try {
-      const arrayBuffer = await file.arrayBuffer();
+      const arrayBuffer =
+        await file.arrayBuffer();
 
-      const workbook = XLSX.read(arrayBuffer, {
-        type: "array",
-      });
-
-      const parsedRecords = parseWorkbook(
-        file,
-        workbook,
+      const workbook = XLSX.read(
+        arrayBuffer,
+        {
+          type: "array",
+        },
       );
+
+      const parsedRecords =
+        parseWorkbook(
+          file,
+          workbook,
+        );
 
       setRecords(parsedRecords);
 
       setMessage(
-        `${parsedRecords.length} records found in Excel.`,
+        `${parsedRecords.length} records found in the first worksheet.`,
       );
     } catch (error) {
       console.error(error);
@@ -290,45 +321,60 @@ export default function Home() {
   }
 
   async function handleSubmit() {
-  if (records.length === 0) {
-    setMessage("Please upload an Excel file first.");
-    return;
-  }
-
-  try {
-    setMessage("Uploading records to Supabase...");
-
-    const response = await fetch("/api/upload", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        records,
-      }),
-    });
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        result.error || "Failed to upload records.",
+    if (records.length === 0) {
+      setMessage(
+        "Please upload an Excel file first.",
       );
+
+      return;
     }
 
-    setMessage(
-      `${result.count} records successfully uploaded to Supabase.`,
-    );
-  } catch (error) {
-    console.error(error);
+    try {
+      setIsSubmitting(true);
 
-    setMessage(
-      error instanceof Error
-        ? error.message
-        : "Something went wrong while uploading.",
-    );
+      setMessage(
+        "Uploading records to Supabase...",
+      );
+
+      const response = await fetch(
+        "/api/upload",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            records,
+          }),
+        },
+      );
+
+      const result =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result.error ||
+            "Failed to upload records.",
+        );
+      }
+
+      setMessage(
+        `${result.count} records successfully uploaded to Supabase.`,
+      );
+    } catch (error) {
+      console.error(error);
+
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Something went wrong while uploading.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
-}
 
   const headers = [
     "Activity / Steps",
@@ -358,8 +404,6 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-zinc-100 p-10 font-sans text-zinc-900">
       <div className="mx-auto w-full max-w-[1360px]">
-        {/* HEADER */}
-
         <header className="mb-8 flex items-end justify-between gap-10">
           <div>
             <h1 className="mb-2 text-3xl font-semibold tracking-tight">
@@ -367,12 +411,9 @@ export default function Home() {
             </h1>
 
             <p className="text-sm text-zinc-500">
-              Upload an Excel file to preview the
-              records.
+              Upload an Excel file to preview the records.
             </p>
           </div>
-
-          {/* UPLOAD ACTIONS */}
 
           <div className="flex items-center gap-3">
             <label
@@ -387,7 +428,9 @@ export default function Home() {
               type="file"
               accept=".xlsx,.xls"
               className="hidden"
-              onChange={handleFileChange}
+              onChange={
+                handleFileChange
+              }
             />
 
             <span className="w-[180px] overflow-hidden text-ellipsis whitespace-nowrap text-sm text-zinc-500">
@@ -396,24 +439,27 @@ export default function Home() {
 
             <button
               type="button"
-              onClick={handleSubmit}
-              disabled={records.length === 0}
+              onClick={
+                handleSubmit
+              }
+              disabled={
+                records.length === 0 ||
+                isSubmitting
+              }
               className="flex h-11 cursor-pointer items-center justify-center rounded-md bg-zinc-900 px-5 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Submit
+              {isSubmitting
+                ? "Submitting..."
+                : "Submit"}
             </button>
           </div>
         </header>
-
-        {/* STATUS MESSAGE */}
 
         {message && (
           <div className="mb-4 rounded-md border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700">
             {message}
           </div>
         )}
-
-        {/* TABLE */}
 
         <main className="overflow-hidden rounded-lg border border-zinc-200 bg-white">
           <div className="flex h-[78px] items-center justify-between border-b border-zinc-200 px-6">
@@ -423,62 +469,80 @@ export default function Home() {
               </h2>
 
               <p className="text-sm text-zinc-500">
-                {records.length} records
+                {
+                  records.length
+                }{" "}
+                records
               </p>
             </div>
           </div>
 
           <div className="h-[650px] w-full overflow-auto">
             <table className="w-max min-w-full border-collapse text-sm">
-              {/* TABLE HEADER */}
-
               <thead className="sticky top-0 z-10 bg-zinc-50">
                 <tr>
-                  {headers.map((header) => (
-                    <th
-                      key={header}
-                      className="min-w-[140px] border-b border-r border-zinc-200 px-4 py-4 text-left text-xs font-semibold whitespace-nowrap text-zinc-600"
-                    >
-                      {header}
-                    </th>
-                  ))}
+                  {headers.map(
+                    (header) => (
+                      <th
+                        key={
+                          header
+                        }
+                        className="min-w-[140px] whitespace-nowrap border-b border-r border-zinc-200 px-4 py-4 text-left text-xs font-semibold text-zinc-600"
+                      >
+                        {
+                          header
+                        }
+                      </th>
+                    ),
+                  )}
                 </tr>
               </thead>
 
-              {/* TABLE BODY */}
-
               <tbody>
-                {records.length === 0 ? (
+                {records.length ===
+                0 ? (
                   <tr>
                     <td
-                      colSpan={22}
+                      colSpan={
+                        22
+                      }
                       className="h-[300px] text-center align-middle text-sm text-zinc-400"
                     >
-                      Upload an Excel file to display
-                      data.
+                      Upload an Excel file to display data.
                     </td>
                   </tr>
                 ) : (
                   records.map(
-                    (record, index) => (
+                    (
+                      record,
+                      index,
+                    ) => (
                       <tr
                         key={`${record.sheet_name}-${record.excel_row_number}-${index}`}
                         className="hover:bg-zinc-50"
                       >
                         <td className="max-w-[250px] border-b border-r border-zinc-200 p-4 align-top">
-                          {record.activity_steps}
+                          {
+                            record.activity_steps
+                          }
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
-                          {record.system}
+                          {
+                            record.system
+                          }
                         </td>
 
                         <td className="max-w-[250px] border-b border-r border-zinc-200 p-4 align-top">
-                          {record.hazard_aspect}
+                          {
+                            record.hazard_aspect
+                          }
                         </td>
 
                         <td className="max-w-[250px] border-b border-r border-zinc-200 p-4 align-top">
-                          {record.risk_impact}
+                          {
+                            record.risk_impact
+                          }
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
@@ -494,11 +558,15 @@ export default function Home() {
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
-                          {record.type}
+                          {
+                            record.type
+                          }
                         </td>
 
                         <td className="max-w-[300px] border-b border-r border-zinc-200 p-4 align-top">
-                          {record.current_control}
+                          {
+                            record.current_control
+                          }
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
@@ -508,7 +576,9 @@ export default function Home() {
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
-                          {record.initial_severity}
+                          {
+                            record.initial_severity
+                          }
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
@@ -518,15 +588,21 @@ export default function Home() {
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
-                          {record.initial_total}
+                          {
+                            record.initial_total
+                          }
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
-                          {record.elimination}
+                          {
+                            record.elimination
+                          }
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
-                          {record.substitution}
+                          {
+                            record.substitution
+                          }
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
@@ -542,7 +618,9 @@ export default function Home() {
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
-                          {record.ppe}
+                          {
+                            record.ppe
+                          }
                         </td>
 
                         <td className="max-w-[300px] border-b border-r border-zinc-200 p-4 align-top">
@@ -558,7 +636,9 @@ export default function Home() {
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
-                          {record.final_severity}
+                          {
+                            record.final_severity
+                          }
                         </td>
 
                         <td className="border-b border-r border-zinc-200 p-4 align-top">
@@ -568,7 +648,9 @@ export default function Home() {
                         </td>
 
                         <td className="border-b border-zinc-200 p-4 align-top">
-                          {record.final_total}
+                          {
+                            record.final_total
+                          }
                         </td>
                       </tr>
                     ),

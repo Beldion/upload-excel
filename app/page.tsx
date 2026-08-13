@@ -289,22 +289,46 @@ export default function Home() {
     }
   }
 
-  function handleSubmit() {
-    if (records.length === 0) {
-      setMessage(
-        "Please upload an Excel file first.",
-      );
+  async function handleSubmit() {
+  if (records.length === 0) {
+    setMessage("Please upload an Excel file first.");
+    return;
+  }
 
-      return;
+  try {
+    setMessage("Uploading records to Supabase...");
+
+    const response = await fetch("/api/upload", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        records,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        result.error || "Failed to upload records.",
+      );
     }
 
-    // We will connect this to Supabase next.
-    console.log("Records ready:", records);
+    setMessage(
+      `${result.count} records successfully uploaded to Supabase.`,
+    );
+  } catch (error) {
+    console.error(error);
 
     setMessage(
-      `${records.length} records are ready to submit.`,
+      error instanceof Error
+        ? error.message
+        : "Something went wrong while uploading.",
     );
   }
+}
 
   const headers = [
     "Activity / Steps",

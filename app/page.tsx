@@ -350,15 +350,23 @@ export default function Home() {
         },
       );
 
-      const result =
-        await response.json();
+      const responseText = await response.text();
 
-      if (!response.ok) {
-        throw new Error(
-          result.error ||
-            "Failed to upload records.",
-        );
-      }
+let result;
+
+try {
+  result = JSON.parse(responseText);
+} catch {
+  throw new Error(
+    `API returned non-JSON response. Status: ${response.status}. Response: ${responseText.slice(0, 200)}`,
+  );
+}
+
+if (!response.ok) {
+  throw new Error(
+    result.error || `Upload failed with status ${response.status}`,
+  );
+}
 
       setMessage(
         `${result.count} records successfully uploaded to Supabase.`,

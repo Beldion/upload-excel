@@ -49,7 +49,11 @@ function cleanText(value: unknown): string | null {
 }
 
 function cleanNumber(value: unknown): number | null {
-  if (value === undefined || value === null || value === "") {
+  if (
+    value === undefined ||
+    value === null ||
+    value === ""
+  ) {
     return null;
   }
 
@@ -59,11 +63,16 @@ function cleanNumber(value: unknown): number | null {
 }
 
 function isChecked(value: unknown): boolean {
-  if (value === undefined || value === null) {
+  if (
+    value === undefined ||
+    value === null
+  ) {
     return false;
   }
 
-  const text = String(value).trim().toLowerCase();
+  const text = String(value)
+    .trim()
+    .toLowerCase();
 
   return (
     text === "x" ||
@@ -74,54 +83,178 @@ function isChecked(value: unknown): boolean {
   );
 }
 
-function parseWorkbook(file: File, workbook: XLSX.WorkBook) {
+function isActivityHeader(value: unknown) {
+  const text = String(value ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+
+  return (
+    text === "ACTIVITY / STEP" ||
+    text === "ACTIVITY / STEPS"
+  );
+}
+
+function isFooterRow(row: unknown[]) {
+  const rowText = row
+    .map((cell) =>
+      String(cell ?? "").toUpperCase(),
+    )
+    .join(" ");
+
+  return (
+    rowText.includes("REFERENCE PROCEDURE") ||
+    rowText.includes("PREPARED BY:") ||
+    rowText.includes("REVIEWED BY:") ||
+    rowText.includes("APPROVED BY:") ||
+    rowText.includes("NOTED BY:")
+  );
+}
+
+function isActualDataRow(
+  row: unknown[],
+  startColumn: number,
+) {
+  /*
+   * IMPORTANT:
+   *
+   * Do not use TOTAL columns to determine whether this
+   * is a real record.
+   *
+   * Blank Excel template rows sometimes contain
+   * formulas that evaluate to 0.
+   *
+   * Instead, check the descriptive HIRAC fields.
+   */
+
+  const meaningfulColumns = [
+    startColumn, // Activity
+    startColumn + 1, // System
+    startColumn + 2, // Hazard
+    startColumn + 3, // Risk
+    startColumn + 6, // Type
+    startColumn + 7, // Current Control
+    startColumn + 12, // Elimination
+    startColumn + 13, // Substitution
+    startColumn + 14, // Engineering
+    startColumn + 15, // Administrative
+    startColumn + 16, // PPE
+    startColumn + 17, // Additional Control
+  ];
+
+  return meaningfulColumns.some(
+    (columnIndex) =>
+      cleanText(row[columnIndex]) !== null,
+  );
+}
+
+function parseWorkbook(
+  file: File,
+  workbook: XLSX.WorkBook,
+) {
   const records: HiracRecord[] = [];
 
-  // Only process the FIRST worksheet
-  const sheetName = workbook.SheetNames[0];
+  /*
+   * For now we continue processing only the
+   * first worksheet.
+   */
+  const sheetName =
+    workbook.SheetNames[0];
 
   if (!sheetName) {
     return records;
   }
 
-  const worksheet = workbook.Sheets[sheetName];
+  const worksheet =
+    workbook.Sheets[sheetName];
 
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
-    header: 1,
-    defval: "",
-    raw: true,
-  });
+  const rows =
+    XLSX.utils.sheet_to_json<unknown[]>(
+      worksheet,
+      {
+        header: 1,
+        defval: "",
+        raw: true,
+      },
+    );
 
-  // Find the row containing "ACTIVITY / STEPS"
-  const headerRowIndex = rows.findIndex((row) =>
-    row.some(
-      (cell) =>
-        String(cell ?? "")
-          .trim()
-          .toUpperCase() === "ACTIVITY / STEPS",
-    ),
-  );
+  /*
+   * Supports both:
+   *
+   * ACTIVITY / STEP
+   * ACTIVITY / STEPS
+   */
+  const headerRowIndex =
+    rows.findIndex((row) =>
+      row.some((cell) =>
+        isActivityHeader(cell),
+      ),
+    );
 
   if (headerRowIndex === -1) {
     return records;
   }
 
-  const headerRow = rows[headerRowIndex];
+  const headerRow =
+    rows[headerRowIndex];
 
-  // Find which Excel column the table starts at
-  const startColumn = headerRow.findIndex(
-    (cell) =>
-      String(cell ?? "")
-        .trim()
-        .toUpperCase() === "ACTIVITY / STEPS",
-  );
+  const startColumn =
+    headerRow.findIndex((cell) =>
+      isActivityHeader(cell),
+    );
 
   if (startColumn === -1) {
     return records;
   }
 
-  // Data starts after the multi-row header section
-  const dataStartRow = headerRowIndex + 4;
+  /*
+   * Instead of assuming data always starts
+   * +3 or +4 rows after the main header,
+   * find the first genuine data row.
+   */
+  let dataStartRow = -1;
+
+  for (
+    let rowIndex =
+      headerRowIndex + 1;
+    rowIndex < rows.length;
+    rowIndex++
+  ) {
+    const row = rows[rowIndex];
+
+    if (isFooterRow(row)) {
+      break;
+    }
+
+    if (
+      isActualDataRow(
+        row,
+        startColumn,
+      )
+    ) {
+      dataStartRow = rowIndex;
+      break;
+    }
+  }
+
+  if (dataStartRow === -1) {
+    return records;
+  }
+
+  /*
+   * Used for Excel vertically merged Activity cells.
+   *
+   * Example:
+   *
+   * Activity A | QMS | hazard...
+   *            | EMS | hazard...
+   *            | OHS | hazard...
+   *
+   * All three records will receive Activity A.
+   */
+  let currentActivity:
+    | string
+    | null = null;
 
   for (
     let rowIndex = dataStartRow;
@@ -130,130 +263,144 @@ function parseWorkbook(file: File, workbook: XLSX.WorkBook) {
   ) {
     const row = rows[rowIndex];
 
-    const rowText = row
-      .map((cell) => String(cell ?? "").toUpperCase())
-      .join(" ");
-
-    // Stop when we reach the footer/signatures
-    if (
-      rowText.includes("REFERENCE PROCEDURE") ||
-      rowText.includes("PREPARED BY:") ||
-      rowText.includes("REVIEWED BY:") ||
-      rowText.includes("APPROVED BY:") ||
-      rowText.includes("NOTED BY:")
-    ) {
+    if (isFooterRow(row)) {
       break;
     }
 
-    const values = row.slice(
-      startColumn,
-      startColumn + 22,
-    );
-
-    const hasData = values.some(
-      (value) =>
-        value !== "" &&
-        value !== null &&
-        value !== undefined,
-    );
-
-    if (!hasData) {
+    /*
+     * Ignore empty template rows even when
+     * Excel formulas put zeros in TOTAL cells.
+     */
+    if (
+      !isActualDataRow(
+        row,
+        startColumn,
+      )
+    ) {
       continue;
     }
 
-    const record: HiracRecord = {
-      source_file: file.name,
-      sheet_name: sheetName,
-      excel_row_number: rowIndex + 1,
-
-      activity_steps: cleanText(
+    const activityFromRow =
+      cleanText(
         row[startColumn],
-      ),
+      );
 
-      system: cleanText(
-        row[startColumn + 1],
-      ),
+    if (activityFromRow) {
+      currentActivity =
+        activityFromRow;
+    }
 
-      hazard_aspect: cleanText(
-        row[startColumn + 2],
-      ),
+    const record: HiracRecord =
+      {
+        source_file: file.name,
+        sheet_name: sheetName,
+        excel_row_number:
+          rowIndex + 1,
 
-      risk_impact: cleanText(
-        row[startColumn + 3],
-      ),
+        activity_steps:
+          currentActivity,
 
-      routine: isChecked(
-        row[startColumn + 4],
-      ),
+        system: cleanText(
+          row[startColumn + 1],
+        ),
 
-      non_routine: isChecked(
-        row[startColumn + 5],
-      ),
+        hazard_aspect:
+          cleanText(
+            row[startColumn + 2],
+          ),
 
-      type: cleanText(
-        row[startColumn + 6],
-      ),
+        risk_impact:
+          cleanText(
+            row[startColumn + 3],
+          ),
 
-      current_control: cleanText(
-        row[startColumn + 7],
-      ),
+        routine: isChecked(
+          row[startColumn + 4],
+        ),
 
-      initial_probability: cleanNumber(
-        row[startColumn + 8],
-      ),
+        non_routine:
+          isChecked(
+            row[startColumn + 5],
+          ),
 
-      initial_severity: cleanNumber(
-        row[startColumn + 9],
-      ),
+        type: cleanText(
+          row[startColumn + 6],
+        ),
 
-      initial_legal_laws: cleanNumber(
-        row[startColumn + 10],
-      ),
+        current_control:
+          cleanText(
+            row[startColumn + 7],
+          ),
 
-      initial_total: cleanNumber(
-        row[startColumn + 11],
-      ),
+        initial_probability:
+          cleanNumber(
+            row[startColumn + 8],
+          ),
 
-      elimination: cleanText(
-        row[startColumn + 12],
-      ),
+        initial_severity:
+          cleanNumber(
+            row[startColumn + 9],
+          ),
 
-      substitution: cleanText(
-        row[startColumn + 13],
-      ),
+        initial_legal_laws:
+          cleanNumber(
+            row[startColumn + 10],
+          ),
 
-      engineering_control: cleanText(
-        row[startColumn + 14],
-      ),
+        initial_total:
+          cleanNumber(
+            row[startColumn + 11],
+          ),
 
-      administrative_control: cleanText(
-        row[startColumn + 15],
-      ),
+        elimination:
+          cleanText(
+            row[startColumn + 12],
+          ),
 
-      ppe: cleanText(
-        row[startColumn + 16],
-      ),
+        substitution:
+          cleanText(
+            row[startColumn + 13],
+          ),
 
-      additional_control: cleanText(
-        row[startColumn + 17],
-      ),
+        engineering_control:
+          cleanText(
+            row[startColumn + 14],
+          ),
 
-      final_probability: cleanNumber(
-        row[startColumn + 18],
-      ),
+        administrative_control:
+          cleanText(
+            row[startColumn + 15],
+          ),
 
-      final_severity: cleanNumber(
-        row[startColumn + 19],
-      ),
+        ppe: cleanText(
+          row[startColumn + 16],
+        ),
 
-      final_legal_laws: cleanNumber(
-        row[startColumn + 20],
-      ),
+        additional_control:
+          cleanText(
+            row[startColumn + 17],
+          ),
 
-      final_total: cleanNumber(
-        row[startColumn + 21],
-      ),
-    };
+        final_probability:
+          cleanNumber(
+            row[startColumn + 18],
+          ),
+
+        final_severity:
+          cleanNumber(
+            row[startColumn + 19],
+          ),
+
+        final_legal_laws:
+          cleanNumber(
+            row[startColumn + 20],
+          ),
+
+        final_total:
+          cleanNumber(
+            row[startColumn + 21],
+          ),
+      };
 
     records.push(record);
   }
@@ -265,19 +412,22 @@ export default function Home() {
   const [fileName, setFileName] =
     useState("No file selected");
 
-  const [records, setRecords] = useState<
-    HiracRecord[]
-  >([]);
+  const [records, setRecords] =
+    useState<HiracRecord[]>([]);
 
-  const [message, setMessage] = useState("");
+  const [message, setMessage] =
+    useState("");
 
-  const [isSubmitting, setIsSubmitting] =
-    useState(false);
+  const [
+    isSubmitting,
+    setIsSubmitting,
+  ] = useState(false);
 
   async function handleFileChange(
     event: React.ChangeEvent<HTMLInputElement>,
   ) {
-    const file = event.target.files?.[0];
+    const file =
+      event.target.files?.[0];
 
     if (!file) {
       return;
@@ -285,18 +435,18 @@ export default function Home() {
 
     setFileName(file.name);
     setRecords([]);
-    setMessage("Reading Excel file...");
+    setMessage(
+      "Reading Excel file...",
+    );
 
     try {
       const arrayBuffer =
         await file.arrayBuffer();
 
-      const workbook = XLSX.read(
-        arrayBuffer,
-        {
+      const workbook =
+        XLSX.read(arrayBuffer, {
           type: "array",
-        },
-      );
+        });
 
       const parsedRecords =
         parseWorkbook(
@@ -304,7 +454,9 @@ export default function Home() {
           workbook,
         );
 
-      setRecords(parsedRecords);
+      setRecords(
+        parsedRecords,
+      );
 
       setMessage(
         `${parsedRecords.length} records found in the first worksheet.`,
@@ -321,7 +473,9 @@ export default function Home() {
   }
 
   async function handleSubmit() {
-    if (records.length === 0) {
+    if (
+      records.length === 0
+    ) {
       setMessage(
         "Please upload an Excel file first.",
       );
@@ -336,37 +490,45 @@ export default function Home() {
         "Uploading records to Supabase...",
       );
 
-      const response = await fetch(
-        "/api/upload",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type":
-              "application/json",
+      const response =
+        await fetch(
+          "/api/upload",
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+
+            body: JSON.stringify({
+              records,
+            }),
           },
-          body: JSON.stringify({
-            records,
-          }),
-        },
-      );
+        );
 
-      const responseText = await response.text();
+      const responseText =
+        await response.text();
 
-let result;
+      let result;
 
-try {
-  result = JSON.parse(responseText);
-} catch {
-  throw new Error(
-    `API returned non-JSON response. Status: ${response.status}. Response: ${responseText.slice(0, 200)}`,
-  );
-}
+      try {
+        result =
+          JSON.parse(
+            responseText,
+          );
+      } catch {
+        throw new Error(
+          `API returned an invalid response. Status: ${response.status}`,
+        );
+      }
 
-if (!response.ok) {
-  throw new Error(
-    result.error || `Upload failed with status ${response.status}`,
-  );
-}
+      if (!response.ok) {
+        throw new Error(
+          result.error ||
+            `Upload failed with status ${response.status}`,
+        );
+      }
 
       setMessage(
         `${result.count} records successfully uploaded to Supabase.`,
@@ -419,7 +581,9 @@ if (!response.ok) {
             </h1>
 
             <p className="text-sm text-zinc-500">
-              Upload an Excel file to preview the records.
+              Upload an Excel file
+              to preview the
+              records.
             </p>
           </div>
 
@@ -451,7 +615,8 @@ if (!response.ok) {
                 handleSubmit
               }
               disabled={
-                records.length === 0 ||
+                records.length ===
+                  0 ||
                 isSubmitting
               }
               className="flex h-11 cursor-pointer items-center justify-center rounded-md bg-zinc-900 px-5 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
@@ -516,7 +681,9 @@ if (!response.ok) {
                       }
                       className="h-[300px] text-center align-middle text-sm text-zinc-400"
                     >
-                      Upload an Excel file to display data.
+                      Upload an Excel
+                      file to display
+                      data.
                     </td>
                   </tr>
                 ) : (

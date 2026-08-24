@@ -44,6 +44,8 @@ type ParsedWorkbook = {
   records: HiracRecord[];
 };
 
+type MessageType = "normal" | "error" | "success";
+
 function cleanText(value: unknown): string | null {
   if (value === undefined || value === null) {
     return null;
@@ -529,14 +531,14 @@ export default function Home() {
     useState("");
 
   /*
-   * NEW:
-   * Determines whether the status message
-   * should use the red error styling.
+   * normal  = gray
+   * error   = red + 500
+   * success = green + 500
    */
   const [
-    isErrorMessage,
-    setIsErrorMessage,
-  ] = useState(false);
+    messageType,
+    setMessageType,
+  ] = useState<MessageType>("normal");
 
   const [
     isSubmitting,
@@ -558,11 +560,7 @@ export default function Home() {
     setProcedureName(null);
     setRecords([]);
 
-    /*
-     * Reset error styling when a new
-     * Excel file is selected.
-     */
-    setIsErrorMessage(false);
+    setMessageType("normal");
 
     setMessage(
       "Reading Excel file...",
@@ -599,7 +597,7 @@ export default function Home() {
         !parsed.department ||
         !parsed.procedureName
       ) {
-        setIsErrorMessage(true);
+        setMessageType("error");
 
         setMessage(
           "Excel data was read, but Department or Procedure Name could not be detected.",
@@ -608,7 +606,7 @@ export default function Home() {
         return;
       }
 
-      setIsErrorMessage(false);
+      setMessageType("normal");
 
       setMessage(
         `${parsed.records.length} records found in the first worksheet.`,
@@ -620,7 +618,7 @@ export default function Home() {
       setProcedureName(null);
       setRecords([]);
 
-      setIsErrorMessage(true);
+      setMessageType("error");
 
       setMessage(
         "Unable to read the Excel file.",
@@ -630,7 +628,7 @@ export default function Home() {
 
   async function handleSubmit() {
     if (!department) {
-      setIsErrorMessage(true);
+      setMessageType("error");
 
       setMessage(
         "Department could not be found in the Excel file.",
@@ -640,7 +638,7 @@ export default function Home() {
     }
 
     if (!procedureName) {
-      setIsErrorMessage(true);
+      setMessageType("error");
 
       setMessage(
         "Procedure Name could not be found in the Excel file.",
@@ -650,7 +648,7 @@ export default function Home() {
     }
 
     if (records.length === 0) {
-      setIsErrorMessage(true);
+      setMessageType("error");
 
       setMessage(
         "No HIRAC records were found.",
@@ -661,7 +659,8 @@ export default function Home() {
 
     try {
       setIsSubmitting(true);
-      setIsErrorMessage(false);
+
+      setMessageType("normal");
 
       setMessage(
         "Checking and uploading records...",
@@ -705,6 +704,8 @@ export default function Home() {
 
       /*
        * DUPLICATE UPLOAD
+       *
+       * Red + font weight 500
        */
       if (
         response.status === 409 &&
@@ -715,13 +716,7 @@ export default function Home() {
             result.uploaded_at,
           );
 
-        /*
-         * This makes the duplicate message:
-         *
-         * RED
-         * font-weight: 500
-         */
-        setIsErrorMessage(true);
+        setMessageType("error");
 
         setMessage(
           `"${procedureName}" for ${department} was already uploaded on ${uploadedDate}. Please contact the administrator if you believe this is incorrect.`,
@@ -738,17 +733,19 @@ export default function Home() {
       }
 
       /*
-       * SUCCESS
+       * SUCCESSFUL UPLOAD
+       *
+       * Green + font weight 500
        */
-      setIsErrorMessage(false);
+      setMessageType("success");
 
       setMessage(
-        `${result.count} records successfully uploaded for "${procedureName}" under ${department}.`,
+        `Upload successful! ${result.count} records for "${procedureName}" under ${department} have been saved.`,
       );
     } catch (error) {
       console.error(error);
 
-      setIsErrorMessage(true);
+      setMessageType("error");
 
       setMessage(
         error instanceof Error
@@ -790,6 +787,22 @@ export default function Home() {
     Boolean(department) &&
     Boolean(procedureName) &&
     !isSubmitting;
+
+  /*
+   * Notification styling
+   */
+  let messageClasses =
+    "border-zinc-200 text-zinc-700";
+
+  if (messageType === "error") {
+    messageClasses =
+      "border-red-200 font-medium text-red-600";
+  }
+
+  if (messageType === "success") {
+    messageClasses =
+      "border-green-200 font-medium text-green-600";
+  }
 
   return (
     <div className="min-h-screen bg-zinc-100 p-10 font-sans text-zinc-900">
@@ -876,15 +889,11 @@ export default function Home() {
           </div>
         )}
 
-        {/* STATUS MESSAGE */}
+        {/* NOTIFICATION */}
 
         {message && (
           <div
-            className={`mb-4 rounded-md border bg-white px-4 py-3 text-sm ${
-              isErrorMessage
-                ? "border-red-200 font-medium text-red-600"
-                : "border-zinc-200 text-zinc-700"
-            }`}
+            className={`mb-4 rounded-md border bg-white px-4 py-3 text-sm ${messageClasses}`}
           >
             {message}
           </div>

@@ -38,6 +38,12 @@ type HiracRecord = {
   final_total: number | null;
 };
 
+type ParsedWorkbook = {
+  department: string | null;
+  procedureName: string | null;
+  records: HiracRecord[];
+};
+
 function cleanText(value: unknown): string | null {
   if (value === undefined || value === null) {
     return null;
@@ -80,17 +86,16 @@ function isChecked(value: unknown): boolean {
   );
 }
 
-/*
- * Supports both versions we've encountered:
- *
- * ACTIVITY / STEP
- * ACTIVITY / STEPS
- */
-function isActivityHeader(value: unknown) {
-  const text = String(value ?? "")
+function normalizeLabel(value: unknown) {
+  return String(value ?? "")
     .trim()
     .replace(/\s+/g, " ")
+    .replace(/:$/, "")
     .toUpperCase();
+}
+
+function isActivityHeader(value: unknown) {
+  const text = normalizeLabel(value);
 
   return (
     text === "ACTIVITY / STEP" ||
@@ -98,10 +103,25 @@ function isActivityHeader(value: unknown) {
   );
 }
 
-/*
- * Detect the footer/signature section so it does
- * not get interpreted as HIRAC data.
- */
+function isDepartmentLabel(value: unknown) {
+  const text = normalizeLabel(value);
+
+  return (
+    text.includes("DIV / DEPT / SEC") ||
+    text === "DEPARTMENT" ||
+    text === "DEPT"
+  );
+}
+
+function isProcedureLabel(value: unknown) {
+  const text = normalizeLabel(value);
+
+  return (
+    text === "PROCEDURE NAME" ||
+    text.includes("PROCEDURE NAME")
+  );
+}
+
 function isFooterRow(row: unknown[]) {
   const rowText = row
     .map((cell) =>
@@ -118,20 +138,6 @@ function isFooterRow(row: unknown[]) {
   );
 }
 
-/*
- * Determine whether an Excel row represents
- * an actual HIRAC record.
- *
- * We only use the primary data columns here.
- *
- * We intentionally DO NOT use:
- * - evaluation fields
- * - hierarchy headers
- * - totals
- *
- * because Excel header/template rows can contain
- * text or formulas in those columns.
- */
 function isActualDataRow(
   row: unknown[],
   startColumn: number,
@@ -165,20 +171,93 @@ function isActualDataRow(
   );
 }
 
+/*
+ * Finds a value beside a label such as:
+ *
+ * Div / Dept / Sec : NSO
+ * Procedure Name   : Patient procedure
+ *
+ * This checks cells to the right of the detected label
+ * because merged Excel cells can create blank cells
+ * between the label and its value.
+ */
+function findValueAfterLabel(
+  rows: unknown[][],
+  labelMatcher: (value: unknown) => boolean,
+  maximumRows = 15,
+): string | null {
+  const rowsToCheck = Math.min(
+    rows.length,
+    maximumRows,
+  );
+
+  for (
+    let rowIndex = 0;
+    rowIndex < rowsToCheck;
+    rowIndex++
+  ) {
+    const row = rows[rowIndex];
+
+    for (
+      let columnIndex = 0;
+      columnIndex < row.length;
+      columnIndex++
+    ) {
+      if (
+        !labelMatcher(
+          row[columnIndex],
+        )
+      ) {
+        continue;
+      }
+
+      /*
+       * Search several cells to the right.
+       * This handles merged/formatted Excel templates.
+       */
+      for (
+        let valueColumn =
+          columnIndex + 1;
+        valueColumn <
+        Math.min(
+          row.length,
+          columnIndex + 8,
+        );
+        valueColumn++
+      ) {
+        const value =
+          cleanText(
+            row[valueColumn],
+          );
+
+        if (value) {
+          return value;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 function parseWorkbook(
   file: File,
   workbook: XLSX.WorkBook,
-) {
+): ParsedWorkbook {
   const records: HiracRecord[] = [];
 
   /*
-   * For now, process only the FIRST worksheet.
+   * We currently process the first worksheet only.
    */
   const sheetName =
     workbook.SheetNames[0];
 
   if (!sheetName) {
-    return records;
+    return {
+      department: null,
+      procedureName: null,
+      records,
+    };
   }
 
   const worksheet =
@@ -195,13 +274,23 @@ function parseWorkbook(
     );
 
   /*
-   * Find:
-   *
-   * ACTIVITY / STEP
-   *
-   * or:
-   *
-   * ACTIVITY / STEPS
+   * Read document-level information from
+   * the top of the worksheet.
+   */
+  const department =
+    findValueAfterLabel(
+      rows,
+      isDepartmentLabel,
+    );
+
+  const procedureName =
+    findValueAfterLabel(
+      rows,
+      isProcedureLabel,
+    );
+
+  /*
+   * Locate the main HIRAC table.
    */
   const headerRowIndex =
     rows.findIndex((row) =>
@@ -211,37 +300,31 @@ function parseWorkbook(
     );
 
   if (headerRowIndex === -1) {
-    return records;
+    return {
+      department,
+      procedureName,
+      records,
+    };
   }
 
   const headerRow =
     rows[headerRowIndex];
 
-  /*
-   * Find where the HIRAC table begins horizontally.
-   */
   const startColumn =
     headerRow.findIndex((cell) =>
       isActivityHeader(cell),
     );
 
   if (startColumn === -1) {
-    return records;
+    return {
+      department,
+      procedureName,
+      records,
+    };
   }
 
   /*
-   * Find the first REAL data row.
-   *
-   * This means we no longer assume:
-   *
-   * header + 3
-   *
-   * or:
-   *
-   * header + 4
-   *
-   * Different HIRAC templates can therefore
-   * contain different numbers of header rows.
+   * Find the first real HIRAC data row.
    */
   let dataStartRow = -1;
 
@@ -269,27 +352,20 @@ function parseWorkbook(
   }
 
   if (dataStartRow === -1) {
-    return records;
+    return {
+      department,
+      procedureName,
+      records,
+    };
   }
 
   /*
-   * Excel merged cells only store their value
-   * in the first physical row.
-   *
-   * Example:
-   *
-   * Activity A | QMS | Hazard 1
-   *            | EMS | Hazard 2
-   *            | OHS | Hazard 3
-   *
-   * currentActivity lets us convert that into:
-   *
-   * Activity A | QMS | Hazard 1
-   * Activity A | EMS | Hazard 2
-   * Activity A | OHS | Hazard 3
+   * Used to carry merged Activity values down
+   * to their related physical Excel rows.
    */
-  let currentActivity: string | null =
-    null;
+  let currentActivity:
+    | string
+    | null = null;
 
   for (
     let rowIndex = dataStartRow;
@@ -302,9 +378,6 @@ function parseWorkbook(
       break;
     }
 
-    /*
-     * Ignore blank template rows.
-     */
     if (
       !isActualDataRow(
         row,
@@ -314,10 +387,6 @@ function parseWorkbook(
       continue;
     }
 
-    /*
-     * Update the current Activity whenever
-     * Excel gives us a new Activity value.
-     */
     const activityFromRow =
       cleanText(
         row[startColumn],
@@ -441,12 +510,49 @@ function parseWorkbook(
     records.push(record);
   }
 
-  return records;
+  return {
+    department,
+    procedureName,
+    records,
+  };
+}
+
+function formatUploadDate(
+  value: string | null | undefined,
+) {
+  if (!value) {
+    return "an earlier date";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString(
+    "en-PH",
+    {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    },
+  );
 }
 
 export default function Home() {
   const [fileName, setFileName] =
     useState("No file selected");
+
+  const [department, setDepartment] =
+    useState<string | null>(null);
+
+  const [
+    procedureName,
+    setProcedureName,
+  ] = useState<string | null>(
+    null,
+  );
 
   const [records, setRecords] =
     useState<HiracRecord[]>([]);
@@ -470,6 +576,8 @@ export default function Home() {
     }
 
     setFileName(file.name);
+    setDepartment(null);
+    setProcedureName(null);
     setRecords([]);
 
     setMessage(
@@ -485,22 +593,43 @@ export default function Home() {
           type: "array",
         });
 
-      const parsedRecords =
+      const parsed =
         parseWorkbook(
           file,
           workbook,
         );
 
-      setRecords(
-        parsedRecords,
+      setDepartment(
+        parsed.department,
       );
 
+      setProcedureName(
+        parsed.procedureName,
+      );
+
+      setRecords(
+        parsed.records,
+      );
+
+      if (
+        !parsed.department ||
+        !parsed.procedureName
+      ) {
+        setMessage(
+          "Excel data was read, but Department or Procedure Name could not be detected.",
+        );
+
+        return;
+      }
+
       setMessage(
-        `${parsedRecords.length} records found in the first worksheet.`,
+        `${parsed.records.length} records found in the first worksheet.`,
       );
     } catch (error) {
       console.error(error);
 
+      setDepartment(null);
+      setProcedureName(null);
       setRecords([]);
 
       setMessage(
@@ -510,9 +639,25 @@ export default function Home() {
   }
 
   async function handleSubmit() {
+    if (!department) {
+      setMessage(
+        "Department could not be found in the Excel file.",
+      );
+
+      return;
+    }
+
+    if (!procedureName) {
+      setMessage(
+        "Procedure Name could not be found in the Excel file.",
+      );
+
+      return;
+    }
+
     if (records.length === 0) {
       setMessage(
-        "Please upload an Excel file first.",
+        "No HIRAC records were found.",
       );
 
       return;
@@ -522,7 +667,7 @@ export default function Home() {
       setIsSubmitting(true);
 
       setMessage(
-        "Uploading records to Supabase...",
+        "Checking and uploading records...",
       );
 
       const response =
@@ -537,17 +682,14 @@ export default function Home() {
             },
 
             body: JSON.stringify({
+              department,
+              procedure_name:
+                procedureName,
               records,
             }),
           },
         );
 
-      /*
-       * Read as text first so an HTML error page
-       * doesn't cause:
-       *
-       * Unexpected token '<'
-       */
       const responseText =
         await response.text();
 
@@ -564,6 +706,25 @@ export default function Home() {
         );
       }
 
+      /*
+       * Duplicate Department + Procedure
+       */
+      if (
+        response.status === 409 &&
+        result.duplicate
+      ) {
+        const uploadedDate =
+          formatUploadDate(
+            result.uploaded_at,
+          );
+
+        setMessage(
+          `"${procedureName}" for ${department} was already uploaded on ${uploadedDate}. Please contact the administrator if you believe this is incorrect.`,
+        );
+
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(
           result.error ||
@@ -572,7 +733,7 @@ export default function Home() {
       }
 
       setMessage(
-        `${result.count} records successfully uploaded to Supabase.`,
+        `${result.count} records successfully uploaded for "${procedureName}" under ${department}.`,
       );
     } catch (error) {
       console.error(error);
@@ -612,6 +773,12 @@ export default function Home() {
     "Final Total",
   ];
 
+  const canSubmit =
+    records.length > 0 &&
+    Boolean(department) &&
+    Boolean(procedureName) &&
+    !isSubmitting;
+
   return (
     <div className="min-h-screen bg-zinc-100 p-10 font-sans text-zinc-900">
       <div className="mx-auto w-full max-w-[1360px]">
@@ -628,8 +795,6 @@ export default function Home() {
               Upload an Excel file to preview the records.
             </p>
           </div>
-
-          {/* UPLOAD CONTROLS */}
 
           <div className="flex items-center gap-3">
             <label
@@ -659,8 +824,7 @@ export default function Home() {
                 handleSubmit
               }
               disabled={
-                records.length === 0 ||
-                isSubmitting
+                !canSubmit
               }
               className="flex h-11 cursor-pointer items-center justify-center rounded-md bg-zinc-900 px-5 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -671,7 +835,36 @@ export default function Home() {
           </div>
         </header>
 
-        {/* MESSAGE */}
+        {/* DOCUMENT INFORMATION */}
+
+        {(department ||
+          procedureName) && (
+          <div className="mb-4 grid grid-cols-2 gap-4">
+            <div className="rounded-md border border-zinc-200 bg-white px-4 py-3">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                Department
+              </p>
+
+              <p className="text-sm font-semibold text-zinc-800">
+                {department ??
+                  "Not detected"}
+              </p>
+            </div>
+
+            <div className="rounded-md border border-zinc-200 bg-white px-4 py-3">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                Procedure Name
+              </p>
+
+              <p className="text-sm font-semibold text-zinc-800">
+                {procedureName ??
+                  "Not detected"}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* STATUS */}
 
         {message && (
           <div className="mb-4 rounded-md border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700">
@@ -697,8 +890,6 @@ export default function Home() {
           <div className="h-[650px] w-full overflow-auto">
             <table className="w-max min-w-full border-collapse text-sm">
 
-              {/* TABLE HEADER */}
-
               <thead className="sticky top-0 z-10 bg-zinc-50">
                 <tr>
                   {headers.map(
@@ -713,8 +904,6 @@ export default function Home() {
                   )}
                 </tr>
               </thead>
-
-              {/* TABLE BODY */}
 
               <tbody>
                 {records.length === 0 ? (

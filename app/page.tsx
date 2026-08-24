@@ -171,16 +171,6 @@ function isActualDataRow(
   );
 }
 
-/*
- * Finds a value beside a label such as:
- *
- * Div / Dept / Sec : NSO
- * Procedure Name   : Patient procedure
- *
- * This checks cells to the right of the detected label
- * because merged Excel cells can create blank cells
- * between the label and its value.
- */
 function findValueAfterLabel(
   rows: unknown[][],
   labelMatcher: (value: unknown) => boolean,
@@ -211,10 +201,6 @@ function findValueAfterLabel(
         continue;
       }
 
-      /*
-       * Search several cells to the right.
-       * This handles merged/formatted Excel templates.
-       */
       for (
         let valueColumn =
           columnIndex + 1;
@@ -246,9 +232,6 @@ function parseWorkbook(
 ): ParsedWorkbook {
   const records: HiracRecord[] = [];
 
-  /*
-   * We currently process the first worksheet only.
-   */
   const sheetName =
     workbook.SheetNames[0];
 
@@ -273,10 +256,6 @@ function parseWorkbook(
       },
     );
 
-  /*
-   * Read document-level information from
-   * the top of the worksheet.
-   */
   const department =
     findValueAfterLabel(
       rows,
@@ -289,9 +268,6 @@ function parseWorkbook(
       isProcedureLabel,
     );
 
-  /*
-   * Locate the main HIRAC table.
-   */
   const headerRowIndex =
     rows.findIndex((row) =>
       row.some((cell) =>
@@ -323,9 +299,6 @@ function parseWorkbook(
     };
   }
 
-  /*
-   * Find the first real HIRAC data row.
-   */
   let dataStartRow = -1;
 
   for (
@@ -359,13 +332,8 @@ function parseWorkbook(
     };
   }
 
-  /*
-   * Used to carry merged Activity values down
-   * to their related physical Excel rows.
-   */
-  let currentActivity:
-    | string
-    | null = null;
+  let currentActivity: string | null =
+    null;
 
   for (
     let rowIndex = dataStartRow;
@@ -560,6 +528,16 @@ export default function Home() {
   const [message, setMessage] =
     useState("");
 
+  /*
+   * NEW:
+   * Determines whether the status message
+   * should use the red error styling.
+   */
+  const [
+    isErrorMessage,
+    setIsErrorMessage,
+  ] = useState(false);
+
   const [
     isSubmitting,
     setIsSubmitting,
@@ -579,6 +557,12 @@ export default function Home() {
     setDepartment(null);
     setProcedureName(null);
     setRecords([]);
+
+    /*
+     * Reset error styling when a new
+     * Excel file is selected.
+     */
+    setIsErrorMessage(false);
 
     setMessage(
       "Reading Excel file...",
@@ -615,12 +599,16 @@ export default function Home() {
         !parsed.department ||
         !parsed.procedureName
       ) {
+        setIsErrorMessage(true);
+
         setMessage(
           "Excel data was read, but Department or Procedure Name could not be detected.",
         );
 
         return;
       }
+
+      setIsErrorMessage(false);
 
       setMessage(
         `${parsed.records.length} records found in the first worksheet.`,
@@ -632,6 +620,8 @@ export default function Home() {
       setProcedureName(null);
       setRecords([]);
 
+      setIsErrorMessage(true);
+
       setMessage(
         "Unable to read the Excel file.",
       );
@@ -640,6 +630,8 @@ export default function Home() {
 
   async function handleSubmit() {
     if (!department) {
+      setIsErrorMessage(true);
+
       setMessage(
         "Department could not be found in the Excel file.",
       );
@@ -648,6 +640,8 @@ export default function Home() {
     }
 
     if (!procedureName) {
+      setIsErrorMessage(true);
+
       setMessage(
         "Procedure Name could not be found in the Excel file.",
       );
@@ -656,6 +650,8 @@ export default function Home() {
     }
 
     if (records.length === 0) {
+      setIsErrorMessage(true);
+
       setMessage(
         "No HIRAC records were found.",
       );
@@ -665,6 +661,7 @@ export default function Home() {
 
     try {
       setIsSubmitting(true);
+      setIsErrorMessage(false);
 
       setMessage(
         "Checking and uploading records...",
@@ -707,7 +704,7 @@ export default function Home() {
       }
 
       /*
-       * Duplicate Department + Procedure
+       * DUPLICATE UPLOAD
        */
       if (
         response.status === 409 &&
@@ -717,6 +714,14 @@ export default function Home() {
           formatUploadDate(
             result.uploaded_at,
           );
+
+        /*
+         * This makes the duplicate message:
+         *
+         * RED
+         * font-weight: 500
+         */
+        setIsErrorMessage(true);
 
         setMessage(
           `"${procedureName}" for ${department} was already uploaded on ${uploadedDate}. Please contact the administrator if you believe this is incorrect.`,
@@ -732,11 +737,18 @@ export default function Home() {
         );
       }
 
+      /*
+       * SUCCESS
+       */
+      setIsErrorMessage(false);
+
       setMessage(
         `${result.count} records successfully uploaded for "${procedureName}" under ${department}.`,
       );
     } catch (error) {
       console.error(error);
+
+      setIsErrorMessage(true);
 
       setMessage(
         error instanceof Error
@@ -864,10 +876,16 @@ export default function Home() {
           </div>
         )}
 
-        {/* STATUS */}
+        {/* STATUS MESSAGE */}
 
         {message && (
-          <div className="mb-4 rounded-md border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700">
+          <div
+            className={`mb-4 rounded-md border bg-white px-4 py-3 text-sm ${
+              isErrorMessage
+                ? "border-red-200 font-medium text-red-600"
+                : "border-zinc-200 text-zinc-700"
+            }`}
+          >
             {message}
           </div>
         )}
@@ -1013,7 +1031,7 @@ export default function Home() {
                           {record.final_legal_laws}
                         </td>
 
-                        <td className="border-b border-zinc-200 p-4 align-top">
+                        <td className="border-b border-r border-zinc-200 p-4 align-top">
                           {record.final_total}
                         </td>
                       </tr>

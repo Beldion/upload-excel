@@ -1,25 +1,7 @@
 "use client";
 
+import React, { useEffect, useState } from "react";
 import Script from "next/script";
-import { useEffect, useState } from "react";
-
-/**
- * A-Frame uses custom HTML elements such as:
- * <a-scene>, <a-nft>, <a-box>, etc.
- *
- * TypeScript doesn't know about these elements by default,
- * so we declare them here.
- */
-declare global {
-  namespace JSX {
-    interface IntrinsicElements {
-      "a-scene": any;
-      "a-nft": any;
-      "a-box": any;
-      "a-entity": any;
-    }
-  }
-}
 
 export default function ARPage() {
   const [aframeLoaded, setAframeLoaded] = useState(false);
@@ -41,7 +23,7 @@ export default function ARPage() {
 
   return (
     <>
-      {/* Load A-Frame first */}
+      {/* Load A-Frame */}
       <Script
         src="https://aframe.io/releases/1.6.0/aframe.min.js"
         strategy="afterInteractive"
@@ -51,7 +33,7 @@ export default function ARPage() {
         }}
       />
 
-      {/* Load AR.js only after A-Frame */}
+      {/* Load AR.js after A-Frame */}
       {aframeLoaded && (
         <Script
           src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar-nft.js"
@@ -74,7 +56,7 @@ export default function ARPage() {
           background: "#000",
         }}
       >
-        {/* Loading message */}
+        {/* Loading */}
         {!arReady && (
           <div
             style={{
@@ -99,39 +81,47 @@ export default function ARPage() {
           </div>
         )}
 
-        {/* Only create AR scene after both libraries load */}
-        {aframeLoaded && arjsLoaded && (
-          <a-scene
-            embedded
-            vr-mode-ui="enabled: false"
-            renderer="logarithmicDepthBuffer: true;"
-            arjs="
-              trackingMethod: best;
-              sourceType: webcam;
-              debugUIEnabled: false;
-            "
-          >
-            {/* Image target */}
-            <a-nft
-              type="nft"
-              url="/markers/poster"
-              smooth="true"
-              smoothCount="10"
-              smoothTolerance="0.01"
-              smoothThreshold="5"
-            >
-              {/* Test AR object */}
-              <a-box
-                position="50 100 0"
-                scale="20 20 20"
-                material="color: red;"
-              ></a-box>
-            </a-nft>
+        {/* AR Scene */}
+        {aframeLoaded &&
+          arjsLoaded &&
+          React.createElement(
+            "a-scene",
+            {
+              embedded: true,
+              "vr-mode-ui": "enabled: false",
+              renderer: "logarithmicDepthBuffer: true;",
+              arjs: `
+                trackingMethod: best;
+                sourceType: webcam;
+                debugUIEnabled: false;
+              `,
+            },
 
-            {/* AR Camera */}
-            <a-entity camera></a-entity>
-          </a-scene>
-        )}
+            // NFT IMAGE TARGET
+            React.createElement(
+              "a-nft",
+              {
+                type: "nft",
+                url: "/markers/poster",
+                smooth: "true",
+                smoothCount: "10",
+                smoothTolerance: "0.01",
+                smoothThreshold: "5",
+              },
+
+              // RED TEST BOX
+              React.createElement("a-box", {
+                position: "50 100 0",
+                scale: "20 20 20",
+                material: "color: red;",
+              })
+            ),
+
+            // CAMERA
+            React.createElement("a-entity", {
+              camera: "",
+            })
+          )}
       </main>
     </>
   );

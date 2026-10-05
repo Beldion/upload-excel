@@ -6,90 +6,45 @@ import Script from "next/script";
 export default function ARPage() {
   const [aframeLoaded, setAframeLoaded] = useState(false);
   const [arjsLoaded, setArjsLoaded] = useState(false);
-
-  const [markerReady, setMarkerReady] = useState(false);
   const [detected, setDetected] = useState(false);
+  const [status, setStatus] = useState("Loading A-Frame...");
 
-  const [message, setMessage] = useState("Loading A-Frame...");
-
-  // ==========================================
-  // AR.JS GLOBAL EVENTS
-  // ==========================================
-
-  useEffect(() => {
-    const handleNFTLoaded = () => {
-      console.log("NFT DESCRIPTORS LOADED");
-
-      setMarkerReady(true);
-      setMessage("🔍 SCANNING FOR FLAG...");
-    };
-
-    window.addEventListener("arjs-nft-loaded", handleNFTLoaded);
-
-    return () => {
-      window.removeEventListener(
-        "arjs-nft-loaded",
-        handleNFTLoaded
-      );
-    };
-  }, []);
-
-  // ==========================================
-  // MARKER EVENTS
-  // ==========================================
+  // ============================================
+  // Listen for marker found / lost
+  // ============================================
 
   useEffect(() => {
     if (!arjsLoaded) return;
 
-    let marker: Element | null = null;
-
-    const setupMarker = () => {
-      marker = document.querySelector("#flag-marker");
+    const interval = window.setInterval(() => {
+      const marker = document.getElementById("flag-marker");
 
       if (!marker) {
-        console.log("Marker not found yet.");
-
-        setMessage("Waiting for marker...");
-
-        return false;
+        return;
       }
 
-      console.log("Marker element found.");
+      window.clearInterval(interval);
 
-      const handleMarkerFound = () => {
+      console.log("Flag marker found in DOM");
+
+      const handleFound = () => {
         console.log("FLAG DETECTED");
 
         setDetected(true);
-        setMessage("✅ FLAG DETECTED!");
+        setStatus("✅ FLAG DETECTED!");
       };
 
-      const handleMarkerLost = () => {
+      const handleLost = () => {
         console.log("FLAG LOST");
 
         setDetected(false);
-        setMessage("🔍 SCANNING FOR FLAG...");
+        setStatus("🔍 SCANNING FOR FLAG...");
       };
 
-      marker.addEventListener(
-        "markerFound",
-        handleMarkerFound
-      );
+      marker.addEventListener("markerFound", handleFound);
+      marker.addEventListener("markerLost", handleLost);
 
-      marker.addEventListener(
-        "markerLost",
-        handleMarkerLost
-      );
-
-      return true;
-    };
-
-    // Give React/A-Frame a moment to create the marker.
-    const interval = window.setInterval(() => {
-      const success = setupMarker();
-
-      if (success) {
-        window.clearInterval(interval);
-      }
+      setStatus("🔍 SCANNING FOR FLAG...");
     }, 500);
 
     return () => {
@@ -99,12 +54,11 @@ export default function ARPage() {
 
   return (
     <>
-      {/* =====================================
+      {/* ========================================
           GLOBAL CSS
-      ====================================== */}
+      ========================================= */}
 
       <style jsx global>{`
-
         html,
         body {
           margin: 0 !important;
@@ -115,21 +69,31 @@ export default function ARPage() {
 
           overflow: hidden !important;
 
-          background: black !important;
-        }
-
-        body {
-          position: fixed !important;
-
-          top: 0;
-          left: 0;
-
-          width: 100vw !important;
-          height: 100vh !important;
+          background: #000 !important;
         }
 
         /*
-         * AR.js camera
+         * Camera created by AR.js
+         */
+        #arjs-video {
+          position: fixed !important;
+
+          top: 0 !important;
+          left: 0 !important;
+
+          width: 100vw !important;
+          height: 100vh !important;
+
+          object-fit: cover !important;
+
+          margin: 0 !important;
+
+          z-index: 0 !important;
+        }
+
+        /*
+         * Fallback in case AR.js doesn't
+         * assign the arjs-video ID.
          */
         video {
           position: fixed !important;
@@ -142,12 +106,11 @@ export default function ARPage() {
 
           object-fit: cover !important;
 
-          margin: 0 !important;
-          padding: 0 !important;
+          z-index: 0 !important;
         }
 
         /*
-         * A-Frame Scene
+         * A-Frame scene
          */
         a-scene {
           position: fixed !important;
@@ -157,6 +120,8 @@ export default function ARPage() {
 
           width: 100vw !important;
           height: 100vh !important;
+
+          z-index: 1 !important;
         }
 
         /*
@@ -170,153 +135,126 @@ export default function ARPage() {
 
           width: 100vw !important;
           height: 100vh !important;
-        }
 
+          z-index: 1 !important;
+
+          background: transparent !important;
+        }
       `}</style>
 
-      {/* =====================================
-          A-FRAME
-      ====================================== */}
+      {/* ========================================
+          LOAD A-FRAME
+      ========================================= */}
 
       <Script
         src="https://aframe.io/releases/1.6.0/aframe.min.js"
         strategy="afterInteractive"
         onLoad={() => {
-          console.log("A-FRAME LOADED");
+          console.log("A-Frame loaded");
 
           setAframeLoaded(true);
-          setMessage("Loading AR.js...");
+          setStatus("Loading AR.js...");
         }}
       />
 
-      {/* =====================================
-          AR.JS
-      ====================================== */}
+      {/* ========================================
+          LOAD AR.JS
+      ========================================= */}
 
       {aframeLoaded && (
         <Script
           src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar-nft.js"
           strategy="afterInteractive"
           onLoad={() => {
-            console.log("AR.JS LOADED");
+            console.log("AR.js loaded");
 
             setArjsLoaded(true);
-            setMessage("Loading flag marker...");
+            setStatus("Starting camera...");
           }}
         />
       )}
 
-      {/* =====================================
-          AR CONTAINER
-      ====================================== */}
+      {/* ========================================
+          AR SCENE
+      ========================================= */}
 
-      <div
-        id="ar-container"
-        style={{
-          position: "fixed",
+      {aframeLoaded &&
+        arjsLoaded &&
+        React.createElement(
+          "a-scene",
+          {
+            embedded: true,
 
-          top: 0,
-          left: 0,
+            "vr-mode-ui": "enabled: false",
 
-          width: "100vw",
-          height: "100vh",
+            renderer:
+              "logarithmicDepthBuffer: true; alpha: true; antialias: true;",
 
-          overflow: "hidden",
+            arjs:
+              "sourceType: webcam; trackingMethod: best; debugUIEnabled: false;",
+          },
 
-          background: "#000",
+          // ====================================
+          // NFT IMAGE TARGET
+          // ====================================
 
-          zIndex: 1,
-        }}
-      >
-        {/* =====================================
-            CREATE AR SCENE
-        ====================================== */}
-
-        {aframeLoaded &&
-          arjsLoaded &&
           React.createElement(
-            "a-scene",
-
+            "a-nft",
             {
-              embedded: true,
+              id: "flag-marker",
 
-              "vr-mode-ui":
-                "enabled: false",
+              type: "nft",
 
-              renderer:
-                "logarithmicDepthBuffer: true; antialias: true; alpha: true;",
+              /*
+               * IMPORTANT:
+               *
+               * Your folder is:
+               *
+               * public/marker/
+               *
+               * NOT:
+               *
+               * public/markers/
+               */
 
-              arjs: `
-                trackingMethod: best;
-                sourceType: webcam;
-                debugUIEnabled: false;
-              `,
+              url: "/marker/flag",
+
+              smooth: "true",
+
+              smoothCount: "10",
+
+              smoothTolerance: "0.01",
+
+              smoothThreshold: "5",
+
+              emitevents: "true",
             },
 
             // ==================================
-            // FLAG MARKER
+            // RED TEST BOX
             // ==================================
 
-            React.createElement(
-              "a-nft",
+            React.createElement("a-box", {
+              position: "50 50 0",
 
-              {
-                id: "flag-marker",
+              scale: "30 30 30",
 
-                type: "nft",
+              material: "color: red;",
+            })
+          ),
 
-                // Looks for:
-                //
-                // /markers/flag.fset
-                // /markers/flag.fset3
-                // /markers/flag.iset
+          // ====================================
+          // CAMERA
+          // ====================================
 
-                url: "/marker/flag",
+          React.createElement("a-entity", {
+            camera: "",
+          })
+        )}
 
-                smooth: "true",
-
-                smoothCount: "10",
-
-                smoothTolerance: "0.01",
-
-                smoothThreshold: "5",
-
-                emitevents: "true",
-              },
-
-              // ==================================
-              // RED TEST BOX
-              // ==================================
-
-              React.createElement("a-box", {
-                position: "50 50 0",
-
-                scale: "30 30 30",
-
-                material:
-                  "color: red; opacity: 1;",
-              })
-            ),
-
-            // ==================================
-            // CAMERA
-            // ==================================
-
-            React.createElement(
-              "a-entity",
-              {
-                camera: "",
-              }
-            )
-          )}
-      </div>
-
-      {/* =====================================
-          DEBUG OVERLAY
-
-          IMPORTANT:
-          This is OUTSIDE the AR container.
-      ====================================== */}
+      {/* ========================================
+          STATUS OVERLAY
+      ========================================= */}
 
       <div
         style={{
@@ -327,75 +265,29 @@ export default function ARPage() {
 
           transform: "translateX(-50%)",
 
-          width: "calc(100% - 40px)",
-          maxWidth: "400px",
+          zIndex: 999999,
 
-          zIndex: 2147483647,
+          padding: "12px 20px",
 
           background: detected
-            ? "rgba(0, 150, 0, 0.95)"
-            : "rgba(0, 0, 0, 0.85)",
+            ? "rgba(0, 150, 0, 0.9)"
+            : "rgba(0, 0, 0, 0.75)",
 
-          color: "white",
+          color: "#fff",
 
-          padding: "14px",
-
-          borderRadius: "10px",
-
-          boxSizing: "border-box",
+          borderRadius: "8px",
 
           fontFamily: "Arial, sans-serif",
 
-          textAlign: "center",
+          fontSize: "16px",
+          fontWeight: "bold",
+
+          whiteSpace: "nowrap",
 
           pointerEvents: "none",
         }}
       >
-        {/* Main status */}
-
-        <div
-          style={{
-            fontSize: "16px",
-            fontWeight: "bold",
-            marginBottom: "10px",
-          }}
-        >
-          {message}
-        </div>
-
-        {/* Debug details */}
-
-        <div
-          style={{
-            fontSize: "12px",
-            lineHeight: "20px",
-            opacity: 0.9,
-          }}
-        >
-          <div>
-            A-Frame:
-            {" "}
-            {aframeLoaded ? "✅" : "❌"}
-          </div>
-
-          <div>
-            AR.js:
-            {" "}
-            {arjsLoaded ? "✅" : "❌"}
-          </div>
-
-          <div>
-            Marker files:
-            {" "}
-            {markerReady ? "✅" : "⏳"}
-          </div>
-
-          <div>
-            Flag detected:
-            {" "}
-            {detected ? "✅ YES" : "❌ NO"}
-          </div>
-        </div>
+        {status}
       </div>
     </>
   );

@@ -271,7 +271,7 @@ export default function ARPage() {
                 // /markers/flag.fset3
                 // /markers/flag.iset
 
-                url: "/markers/flag",
+                url: "/marker/flag",
 
                 smooth: "true",
 
